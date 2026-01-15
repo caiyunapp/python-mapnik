@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v4.2.0)'
+        required: true
+        type: string
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.12-bookworm
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION=${{ inputs.tag }}
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Add Debian sid repository
+        run: |
+          echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list
+          echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential pkg-config libbz2-dev
+          apt-get install -y -t sid libmapnik-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build wheel and sdist
+        run: |
+          uv build --wheel --sdist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'push'
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            ## Python Mapnik ${{ steps.version.outputs.version_number }}
+            
+            ### Installation
+            
+            Download the wheel file below and install:
+            ```bash
+            pip install mapnik-${{ steps.version.outputs.version_number }}-*.whl
+            ```
+            
+            Or install directly from GitHub:
+            ```bash
+            pip install https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/mapnik-${{ steps.version.outputs.version_number }}-cp312-cp312-linux_x86_64.whl
+            ```
+            
+            Or install from source:
+            ```bash
+            pip install git+https://github.com/${{ github.repository }}.git@${{ steps.version.outputs.version }}
+            ```
+            
+            ### Requirements
+            
+            - Python >= 3.8
+            - Mapnik >= 4.0.0
+            
+            ### Changes
+            
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.version }}/CHANGELOG.md) for details.
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Released version: **${{ steps.version.outputs.version }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Built:" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/ >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Distribution:" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub Release: ✅" >> $GITHUB_STEP_SUMMARY

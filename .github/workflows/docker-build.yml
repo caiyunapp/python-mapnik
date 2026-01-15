@@ -1,0 +1,38 @@
+name: Build Docker Image
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: python-mapnik:latest
+          cache-from: type=gha,scope=buildkit-python-mapnik
+          cache-to: type=gha,mode=max,scope=buildkit-python-mapnik
+          load: true
+
+      - name: Run tests in Docker container
+        run: |
+          docker run --rm -v ${{ github.workspace }}/test:/test python-mapnik:latest \
+            sh -c "uv pip install pytest pytest-cov && uv run pytest /test/python_tests -v"
