@@ -24,6 +24,12 @@ maintainers = [
 
 requires-python = ">= 3.8"
 
+[project.optional-dependencies]
+test = [
+    "pytest >= 8.0",
+    "pytest-cov >= 5.0",
+]
+
 [project.urls]
 Homepage = "https://mapnik.org"
 Documentation = "https://github.com/mapnik/python-mapnik/wiki"
@@ -36,3 +42,7 @@ minversion = "8.0"
 testpaths = [
     "test/python_tests",
 ]
+
+[tool.uv]
+# Pin uv version for CI/dev consistency (used by astral-sh/setup-uv).
+required-version = "==0.9.25"
