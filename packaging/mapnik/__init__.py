@@ -38,6 +38,7 @@ Several things happen when you do:
 
 import itertools
 import os
+import sys
 import warnings
 
 def bootstrap_env():
@@ -62,6 +63,22 @@ def bootstrap_env():
                 os.environ[key] = value
 
 bootstrap_env()
+
+# In some build/test setups the compiled extension can be imported under the
+# top-level name `_mapnik` (e.g. due to sys.path/build output layout) and then
+# again as `mapnik._mapnik`. Loading the same pybind11 extension twice in one
+# interpreter can raise errors like:
+#   pybind11::native_enum<...>("CompositeOp") is already registered!
+# If a compatible `_mapnik` is already loaded, alias it to the canonical
+# `mapnik._mapnik` name before importing symbols.
+_canonical_ext_name = f"{__name__}._mapnik"
+if _canonical_ext_name in sys.modules:
+    pass
+elif "_mapnik" in sys.modules:
+    _candidate = sys.modules["_mapnik"]
+    # Heuristic guard: only alias if it looks like our Mapnik extension.
+    if hasattr(_candidate, "Map") and hasattr(_candidate, "version_string"):
+        sys.modules[_canonical_ext_name] = _candidate
 
 from ._mapnik import *
 
