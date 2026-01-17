@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mapnik"
-version = "4.1.3.beta"
+version = "4.2.0"
 description = "Python bindings for Mapnik"
 license = "LGPL-2.1-or-later"
 
@@ -22,7 +22,13 @@ maintainers = [
 {name= "Artem Pavlenko", email = "artem@mapnik.org"},
 ]
 
-requires-python = ">= 3.8"
+requires-python = ">= 3.12"
+
+[project.optional-dependencies]
+test = [
+    "pytest >= 8.0",
+    "pytest-cov >= 5.0",
+]
 
 [project.urls]
 Homepage = "https://mapnik.org"
@@ -36,3 +42,7 @@ minversion = "8.0"
 testpaths = [
     "test/python_tests",
 ]
+
+[tool.uv]
+# Pin uv version for CI/dev consistency (used by astral-sh/setup-uv).
+required-version = ">=0.9.0"

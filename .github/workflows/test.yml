@@ -1,0 +1,111 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.12-bookworm
+    env:
+      UV_LINK_MODE: copy
+      UV_CACHE_DIR: /github/home/.cache/uv
+    permissions:
+      actions: write
+      contents: read
+      checks: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Cache uv downloads
+        uses: actions/cache@v5
+        with:
+          path: /github/home/.cache/uv
+          key: uvcache-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            uvcache-${{ runner.os }}-
+
+      - name: Cache uv virtual environment and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-${{ hashFiles('src/**/*.cpp', 'src/**/*.hpp', 'packaging/**/*.py') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-
+            venv-${{ runner.os }}-
+
+      - name: Add Debian sid repository
+        run: |
+          echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list
+          echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          # Ensure /etc/os-release exists (required by some actions' OS detection).
+          apt-get install -y base-files
+          apt-get install -y build-essential pkg-config libbz2-dev
+          apt-get install -y -t sid libmapnik-dev fonts-noto-cjk
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # Work around container-job failures determining Linux distribution during
+          # setup-uv's built-in caching path; we cache UV_CACHE_DIR ourselves above.
+          enable-cache: false
+
+      - name: Install Python dependencies and build package
+        run: |
+          # Use lockfile when present; avoid doing two full syncs (which can rebuild twice).
+          if [ -f uv.lock ]; then
+            uv sync --extra test --frozen --verbose
+          else
+            uv sync --extra test --verbose
+          fi
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest test/python_tests -v \
+            --cov=mapnik \
+            --cov-report=term \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --junitxml=junit.xml
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+            junit.xml
+          retention-days: 30
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: junit.xml
+          check_name: Test Results
+          comment_mode: off
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: python-mapnik-coverage
+          fail_ci_if_error: false

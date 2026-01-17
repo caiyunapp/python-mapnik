@@ -38,6 +38,7 @@ Several things happen when you do:
 
 import itertools
 import os
+import sys
 import warnings
 
 def bootstrap_env():
@@ -63,6 +64,34 @@ def bootstrap_env():
 
 bootstrap_env()
 
+# In some build/test setups the compiled extension can be imported under the
+# top-level name `_mapnik` (e.g. due to sys.path/build output layout) and then
+# again as `mapnik._mapnik`. Loading the same pybind11 extension twice in one
+# interpreter can raise "already registered" errors for pybind11 types/enums.
+#
+# To avoid a second load, if `_mapnik` is already present, alias it to the
+# canonical `mapnik._mapnik` name before importing.
+_canonical_ext_name = f"{__name__}._mapnik"
+if _canonical_ext_name not in sys.modules and "_mapnik" in sys.modules:
+    # If a top-level `_mapnik` was imported first, alias it to the canonical
+    # `mapnik._mapnik` name so Python reuses the same extension module object
+    # rather than attempting a second load.
+    sys.modules[_canonical_ext_name] = sys.modules["_mapnik"]
+
+_prev_err = getattr(sys, "_python_mapnik_ext_import_error", None)
+if _prev_err is not None:
+    # Avoid repeated attempts to load the extension in the same interpreter
+    # after a failure (which can lead to confusing secondary errors like
+    # "already registered" from pybind11).
+    raise ImportError(str(_prev_err)) from None
+
+try:
+    from . import _mapnik as _ext
+except ImportError as e:
+    setattr(sys, "_python_mapnik_ext_import_error", e)
+    raise
+# Ensure subsequent `import _mapnik` reuses the already-loaded extension.
+sys.modules.setdefault("_mapnik", _ext)
 from ._mapnik import *
 
 def Shapefile(**keywords):

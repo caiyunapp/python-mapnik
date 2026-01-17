@@ -20,6 +20,13 @@ Once you have installed you can test the package by running:
 pytest test/python_tests/
 ```
 
+## UV Sync via Docker
 
-
-
+```
+docker run --rm -it \
+  -e http_proxy -e https_proxy -e no_proxy \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  python-mapnik:local \
+  uv sync --verbose
+```

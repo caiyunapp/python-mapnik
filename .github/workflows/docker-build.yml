@@ -1,0 +1,51 @@
+name: Build Docker Image
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: python-mapnik:latest
+          cache-from: type=gha,scope=buildkit-python-mapnik
+          cache-to: type=gha,mode=max,scope=buildkit-python-mapnik
+          load: true
+
+      - name: Cache uv virtual environment (for container tests)
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-docker-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}
+          restore-keys: |
+            venv-docker-${{ runner.os }}-
+
+      - name: Run tests in Docker container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace/test/python_tests \
+            python-mapnik:latest \
+            sh -c "uv sync --extra test && uv run pytest . -v"

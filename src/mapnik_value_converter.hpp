@@ -36,7 +36,7 @@ struct value_converter
 {
     PyObject * operator() (mapnik::value_integer val) const
     {
-        return ::PyLong_FromLongLong(val);
+        return ::PyLong_FromLong(val);
     }
 
     PyObject * operator() (mapnik::value_double val) const
@@ -126,7 +126,7 @@ public:
         {
             PyObject *tmp = PyNumber_Long(source);
             if (!tmp) return false;
-            value = PyLong_AsLongLong(tmp);
+            value = PyLong_AsLong(tmp);
             Py_DecRef(tmp);
             return !PyErr_Occurred();
         }
@@ -180,7 +180,7 @@ public:
         {
             PyObject *tmp = PyNumber_Long(source);
             if (!tmp) return false;
-            value = PyLong_AsLongLong(tmp);
+            value = PyLong_AsLong(tmp);
             Py_DecRef(tmp);
             return !PyErr_Occurred();
         }
