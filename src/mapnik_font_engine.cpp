@@ -32,9 +32,26 @@ void export_font_engine(py::module const& m)
 {
     using mapnik::freetype_engine;
 
-    py::class_<freetype_engine>(m, "FontEngine")
-        .def_static("register_font", &freetype_engine::register_font)
-        .def_static("register_fonts", &freetype_engine::register_fonts)
-        .def_static("face_names", &freetype_engine::face_names)
-        ;
+    // Keep bindings intentionally simple: some CI environments have hit
+    // "Internal error while parsing type signature" during import. Avoid
+    // default args / keyword-only metadata here and expose explicit overloads.
+    auto cls = py::class_<freetype_engine>(m, "FontEngine");
+
+    cls.def_static("register_font",
+                   [](std::string const& file_name) { return freetype_engine::register_font(file_name); });
+
+    cls.def_static("register_fonts",
+                   [](std::string const& dir) { return freetype_engine::register_fonts(dir, false); });
+    cls.def_static("register_fonts",
+                   [](std::string const& dir, bool recurse) { return freetype_engine::register_fonts(dir, recurse); });
+
+    // Avoid exposing std::vector<std::string> directly in the binding signature.
+    cls.def_static("face_names", []() {
+        py::list out;
+        for (auto const& name : freetype_engine::face_names())
+        {
+            out.append(name);
+        }
+        return out;
+    });
 }

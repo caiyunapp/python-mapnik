@@ -1,7 +1,7 @@
 import glob
 import os
 from subprocess import Popen, PIPE
-from distutils import sysconfig
+import sysconfig
 
 Import('env')
 
@@ -10,15 +10,15 @@ def call(cmd, silent=True):
     if not stderr:
         return stdin.strip()
     elif not silent:
-        print stderr
+        print(stderr)
 
 
 prefix = env['PREFIX']
-target_path = os.path.normpath(sysconfig.get_python_lib() + os.path.sep + env['MAPNIK_NAME'])
+target_path = os.path.normpath(sysconfig.get_path('purelib') + os.path.sep + env['MAPNIK_NAME'])
 
 py_env = env.Clone()
 
-py_env.Append(CPPPATH = sysconfig.get_python_inc())
+py_env.Append(CPPPATH = sysconfig.get_path('include'))
 
 py_env.Append(CPPDEFINES = env['LIBMAPNIK_DEFINES'])
 
@@ -63,12 +63,12 @@ paths += "__all__ = [mapniklibpath,inputpluginspath,fontscollectionpath]\n"
 if not os.path.exists(env['MAPNIK_NAME']):
     os.mkdir(env['MAPNIK_NAME'])
 
-file('mapnik/paths.py','w').write(paths % (env['MAPNIK_LIB_DIR']))
+open('mapnik/paths.py', 'w', encoding='utf-8').write(paths % (env['MAPNIK_LIB_DIR']))
 
 # force open perms temporarily so that `sudo scons install`
 # does not later break simple non-install non-sudo rebuild
 try:
-    os.chmod('mapnik/paths.py',0666)
+    os.chmod('mapnik/paths.py', 0o666)
 except: pass
 
 # install the shared object beside the module directory
@@ -89,7 +89,7 @@ if 'install' in COMMAND_LINE_TARGETS:
     env.Command( targetp, 'mapnik/paths.py',
         [
         Copy("$TARGET","$SOURCE"),
-        Chmod("$TARGET", 0644),
+        Chmod("$TARGET", 0o644),
         ])
 
 if 'uninstall' not in COMMAND_LINE_TARGETS:

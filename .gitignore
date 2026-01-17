@@ -12,7 +12,7 @@
 *.dylib
 build/
 dist/
-mapnik/paths.py
+packaging/mapnik/paths.py
 *.egg-info/
 .eggs/
 .mason/

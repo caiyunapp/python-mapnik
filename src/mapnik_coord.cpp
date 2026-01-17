@@ -41,7 +41,14 @@ void export_coord(py::module const& m)
                        "Gets or sets the x/lon coordinate of the point.\n")
         .def_readwrite("y", &coord<double,2>::y,
                        "Gets or sets the y/lat coordinate of the point.\n")
-        .def(py::self == py::self) // __eq__
+        // mapnik::coord<T,2>::operator== is non-const in some Mapnik versions,
+        // which breaks pybind11's operator helper (it compares `const` values).
+        // Define __eq__ explicitly to avoid relying on the C++ operator signature.
+        .def("__eq__",
+             [](coord<double,2> const& a, coord<double,2> const& b) {
+                 return a.x == b.x && a.y == b.y;
+             },
+             py::is_operator())
         .def(py::self + py::self)  //__add__
         .def(py::self + float())
         .def(float() + py::self)

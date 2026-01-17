@@ -1,5 +1,16 @@
 FROM python:3.14-rc-bookworm
 
+# Build-time proxy support (affects apt/uv/etc. during docker build)
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+ENV http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy} \
+    HTTP_PROXY=${http_proxy} \
+    HTTPS_PROXY=${https_proxy} \
+    NO_PROXY=${no_proxy}
+
 # 添加 Debian sid 仓库以获取 Mapnik 4.2
 RUN echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list && \
     echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
