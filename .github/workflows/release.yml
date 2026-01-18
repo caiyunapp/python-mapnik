@@ -1,13 +1,15 @@
 name: Release
 
 on:
+  pull_request:
+    branches: [main, master, develop]
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v4.2.0)'
+        description: "Tag to release (e.g., v4.2.0)"
         required: true
         type: string
 
@@ -30,11 +32,21 @@ jobs:
           echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
 
   build-wheels:
-    needs: [extract-version]
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel]
+        include:
+          # Linux builds
+          - os: ubuntu-latest
+            platform: linux
+          # macOS ARM64 (Apple Silicon) - builds arm64 wheels
+          - os: macos-latest
+            platform: macos
+            arch: arm64
+          # macOS x86_64 (Intel) - builds x86_64 wheels on macOS 15
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -48,55 +60,102 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install cibuildwheel
+      - name: Setup Mapnik build environment
+        uses: ./.github/actions/setup-mapnik
 
       - name: Build wheels
         env:
           CIBW_BUILD_VERBOSITY: 1
           CIBW_BEFORE_BUILD: "pip install uv && uv sync --frozen --no-dev || uv sync --no-dev"
+          CIBW_ENVIRONMENT_LINUX: >-
+            PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/opt/lib/pkgconfig:$PKG_CONFIG_PATH
+          CIBW_BEFORE_BUILD_LINUX: >-
+            export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/opt/lib/pkgconfig:$PKG_CONFIG_PATH;
+            pip install uv && uv sync --frozen --no-dev || uv sync --no-dev
+          # Set architecture for macOS builds (each runner builds its native arch)
+          CIBW_ARCHS_MACOS: ${{ matrix.arch || 'auto' }}
+          # Ensure pkg-config & mapnik-config are available during build
+          # Note: setup.py now auto-detects most paths, we just need to ensure tools are in PATH
+          # DYLD_LIBRARY_PATH helps delocate find all libraries to bundle into the wheel
+          CIBW_ENVIRONMENT_MACOS: >-
+            PATH=/usr/local/bin:/opt/homebrew/bin:/usr/local/opt/mapnik/bin:/opt/homebrew/opt/mapnik/bin:$PATH
+            MACOSX_DEPLOYMENT_TARGET=15.0
+            DYLD_LIBRARY_PATH=/opt/homebrew/lib:/usr/local/lib
+          # macOS: install dependencies via Homebrew
+          # Note: mapnik installation will automatically pull in all required dependencies
+          # including boost, cairo, harfbuzz, icu4c, gdal, proj, freetype, etc.
+          CIBW_BEFORE_ALL_MACOS: |
+            # Install Mapnik and its dependencies (this will install 100+ dependencies automatically)
+            brew install mapnik pkg-config
+
+            # Ensure ICU is available (Mapnik depends on it, but we need to make sure)
+            brew list icu4c@78 || brew list icu4c || brew install icu4c
+
+            # Get ICU prefix for pkg-config setup
+            ICU_PREFIX=$(brew --prefix icu4c@78 2>/dev/null || brew --prefix icu4c 2>/dev/null || echo "")
+
+            # Create symlinks for ICU pkg-config files to standard locations
+            if [ -n "$ICU_PREFIX" ]; then
+              mkdir -p /usr/local/lib/pkgconfig /opt/homebrew/lib/pkgconfig
+              for dir in "$ICU_PREFIX/lib/pkgconfig" "$ICU_PREFIX/share/pkgconfig"; do
+                [ -d "$dir" ] || continue
+                for pc in "$dir"/icu-*.pc; do
+                  [ -f "$pc" ] || continue
+                  ln -sf "$pc" /usr/local/lib/pkgconfig/ 2>/dev/null || true
+                  ln -sf "$pc" /opt/homebrew/lib/pkgconfig/ 2>/dev/null || true
+                done
+              done
+            fi
+
+            # Verify Mapnik installation
+            mapnik-config --version || echo "Warning: mapnik-config not found"
+            pkg-config --modversion libmapnik || echo "Warning: libmapnik pkg-config not found"
+          # macOS: set up build environment
+          # Note: setup.py now auto-detects Homebrew paths, but we still need to set PKG_CONFIG_PATH
+          # for ICU and ensure Homebrew is in the PATH
+          CIBW_BEFORE_BUILD_MACOS: |
+            eval $(brew shellenv)
+            HOMEBREW_PREFIX=$(brew --prefix)
+
+            # Get ICU prefix (could be icu4c@78 or icu4c)
+            ICU4C_PREFIX=$(brew --prefix icu4c@78 2>/dev/null || brew --prefix icu4c 2>/dev/null || echo "")
+            MAPNIK_PREFIX=$(brew --prefix mapnik 2>/dev/null || echo "$HOMEBREW_PREFIX/opt/mapnik")
+
+            # Set up PKG_CONFIG_PATH to include ICU and Mapnik
+            export PKG_CONFIG_PATH="$HOMEBREW_PREFIX/lib/pkgconfig:$HOMEBREW_PREFIX/share/pkgconfig"
+            [ -n "$ICU4C_PREFIX" ] && export PKG_CONFIG_PATH="$ICU4C_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+            [ -d "$MAPNIK_PREFIX/lib/pkgconfig" ] && export PKG_CONFIG_PATH="$MAPNIK_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+            # Set up DYLD_LIBRARY_PATH for delocate to find all libraries to bundle
+            export DYLD_LIBRARY_PATH="$HOMEBREW_PREFIX/lib:$MAPNIK_PREFIX/lib"
+            [ -n "$ICU4C_PREFIX" ] && export DYLD_LIBRARY_PATH="$ICU4C_PREFIX/lib:$DYLD_LIBRARY_PATH"
+
+            # Verify environment
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+            echo "DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH"
+            echo "Homebrew prefix: $HOMEBREW_PREFIX"
+            echo "ICU prefix: $ICU4C_PREFIX"
+            echo "Mapnik version: $(mapnik-config --version 2>/dev/null || echo 'not found')"
+
+            # Note: CXXFLAGS and LDFLAGS are now automatically set by setup.py
         run: |
           cibuildwheel --output-dir wheelhouse
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.platform }}-${{ matrix.arch || 'all' }}
           path: wheelhouse/*.whl
           retention-days: 7
 
-  build-sdist:
-    needs: [extract-version]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Build sdist
-        run: |
-          uv build --sdist
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist/*.tar.gz
-          retention-days: 7
-
   release:
-    needs: 
+    needs:
       - extract-version
       - build-wheels
-      - build-sdist
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: github.event_name == 'push'
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Download all artifacts
@@ -117,43 +176,42 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ needs.extract-version.outputs.version }}
           name: Release ${{ needs.extract-version.outputs.version }}
           body: |
             ## Python Mapnik ${{ needs.extract-version.outputs.version_number }}
-            
+
             ### Installation
-            
+
             Download the wheel file for your platform and install:
             ```bash
             pip install mapnik-${{ needs.extract-version.outputs.version_number }}-*.whl
             ```
-            
+
             Or install directly from GitHub (replace platform tag as needed):
             ```bash
             pip install https://github.com/${{ github.repository }}/releases/download/${{ needs.extract-version.outputs.version }}/mapnik-${{ needs.extract-version.outputs.version_number }}-cp312-cp312-linux_x86_64.whl
             ```
-            
+
             Or install from source:
             ```bash
             pip install git+https://github.com/${{ github.repository }}.git@${{ needs.extract-version.outputs.version }}
             ```
-            
+
             ### Requirements
-            
+
             - Python >= 3.12
             - Mapnik >= 4.2.0
-            
+
             ### Changes
-            
+
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.extract-version.outputs.version }}/CHANGELOG.md) for details.
           files: |
             dist/*.whl
             dist/*.tar.gz
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
         run: |

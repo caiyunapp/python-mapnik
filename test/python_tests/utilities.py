@@ -4,15 +4,17 @@
 import os
 import sys
 import traceback
+
 import mapnik
 import pytest
 
-READ_FLAGS = 'rb'
+READ_FLAGS = "rb"
 HERE = os.path.dirname(__file__)
 
+
 def execution_path(filename):
-    return os.path.join(os.path.dirname(
-        sys._getframe(1).f_code.co_filename), filename)
+    return os.path.join(os.path.dirname(sys._getframe(1).f_code.co_filename), filename)
+
 
 def contains_word(word, bytestring_):
     """
@@ -32,20 +34,20 @@ def contains_word(word, bytestring_):
     """
     n = len(word)
     assert len(bytestring_) % n == 0, "len(bytestring_) not multiple of len(word)"
-    chunks = [bytestring_[i:i + n] for i in range(0, len(bytestring_), n)]
+    chunks = [bytestring_[i : i + n] for i in range(0, len(bytestring_), n)]
     return word in chunks
 
 
 def pixel2channels(pixel):
-    alpha = (pixel >> 24) & 0xff
-    red = pixel & 0xff
-    green = (pixel >> 8) & 0xff
-    blue = (pixel >> 16) & 0xff
+    alpha = (pixel >> 24) & 0xFF
+    red = pixel & 0xFF
+    green = (pixel >> 8) & 0xFF
+    blue = (pixel >> 16) & 0xFF
     return red, green, blue, alpha
 
 
 def pixel2rgba(pixel):
-    return 'rgba(%s,%s,%s,%s)' % pixel2channels(pixel)
+    return "rgba(%s,%s,%s,%s)" % pixel2channels(pixel)
 
 
 def get_unique_colors(im):
@@ -58,6 +60,7 @@ def get_unique_colors(im):
     pixels = sorted(pixels)
     return list(map(pixel2rgba, pixels))
 
+
 def side_by_side_image(left_im, right_im):
     width = left_im.width() + 1 + right_im.width()
     height = max(left_im.height(), right_im.height())
@@ -65,29 +68,21 @@ def side_by_side_image(left_im, right_im):
     im.composite(left_im, mapnik.CompositeOp.src_over, 1.0, 0, 0)
     if width > 80:
         im.composite(
-            mapnik.Image.open(
-                HERE +
-                '/images/expected.png'),
+            mapnik.Image.open(HERE + "/images/expected.png"),
             mapnik.CompositeOp.difference,
             1.0,
             0,
-            0)
-    im.composite(
-        right_im,
-        mapnik.CompositeOp.src_over,
-        1.0,
-        left_im.width() + 1,
-        0)
+            0,
+        )
+    im.composite(right_im, mapnik.CompositeOp.src_over, 1.0, left_im.width() + 1, 0)
     if width > 80:
         im.composite(
-            mapnik.Image.open(
-                HERE +
-                '/images/actual.png'),
+            mapnik.Image.open(HERE + "/images/actual.png"),
             mapnik.CompositeOp.difference,
             1.0,
-            left_im.width() +
-            1,
-            0)
+            left_im.width() + 1,
+            0,
+        )
     return im
 
 
@@ -99,13 +94,39 @@ def assert_box2d_almost_equal(a, b, msg=None):
     assert a.maxy == pytest.approx(b.maxy, abs=1e-2), msg
 
 
-def images_almost_equal(image1, image2, tolerance = 1):
+def images_almost_equal(
+    image1, image2, tolerance=1, max_mismatched_pixels=0, max_mismatch_ratio=0.0
+):
     def rgba(p):
-        return p & 0xff,(p >> 8) & 0xff,(p >> 16) & 0xff, p >> 24
-    assert image1.width()  == image2.width()
+        return p & 0xFF, (p >> 8) & 0xFF, (p >> 16) & 0xFF, p >> 24
+
+    assert image1.width() == image2.width()
     assert image1.height() == image2.height()
+    total_pixels = image1.width() * image1.height()
+    allowed_mismatches = max(
+        max_mismatched_pixels, int(total_pixels * max_mismatch_ratio)
+    )
+    mismatches = 0
+    max_channel_delta = 0
     for x in range(image1.width()):
         for y in range(image1.height()):
             p1 = image1.get_pixel(x, y)
             p2 = image2.get_pixel(x, y)
-            assert rgba(p1) == pytest.approx(rgba(p2), abs = tolerance)
+            c1 = rgba(p1)
+            c2 = rgba(p2)
+            deltas = [abs(a - b) for a, b in zip(c1, c2)]
+            max_channel_delta = max(max_channel_delta, max(deltas))
+            if any(delta > tolerance for delta in deltas):
+                mismatches += 1
+                if mismatches > allowed_mismatches:
+                    raise AssertionError(
+                        "images differ at %d/%d pixels (allowed %d); "
+                        "max channel delta %d exceeds tolerance %d"
+                        % (
+                            mismatches,
+                            total_pixels,
+                            allowed_mismatches,
+                            max_channel_delta,
+                            tolerance,
+                        )
+                    )
