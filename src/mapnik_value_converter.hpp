@@ -30,13 +30,26 @@
 //pybind11
 #include <pybind11/pybind11.h>
 
+// Platform-specific macros for Python long conversion
+#ifdef __APPLE__
+#define PY_LONG_AS_INTEGER PyLong_AsLongLong
+#define PY_LONG_FROM_INTEGER PyLong_FromLongLong
+#elif defined(__linux__)
+#define PY_LONG_AS_INTEGER PyLong_AsLong
+#define PY_LONG_FROM_INTEGER PyLong_FromLong
+#else
+// Default to AsLongLong for other platforms
+#define PY_LONG_AS_INTEGER PyLong_AsLongLong
+#define PY_LONG_FROM_INTEGER PyLong_FromLongLong
+#endif
+
 namespace {
 
 struct value_converter
 {
     PyObject * operator() (mapnik::value_integer val) const
     {
-        return ::PyLong_FromLong(val);
+        return ::PY_LONG_FROM_INTEGER(val);
     }
 
     PyObject * operator() (mapnik::value_double val) const
@@ -180,7 +193,7 @@ public:
         {
             PyObject *tmp = PyNumber_Long(source);
             if (!tmp) return false;
-            value = PyLong_AsLong(tmp);
+            value = PY_LONG_AS_INTEGER(tmp);
             Py_DecRef(tmp);
             return !PyErr_Occurred();
         }

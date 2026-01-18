@@ -12,14 +12,41 @@ on:
         type: string
 
 jobs:
-  test:
-    uses: ./.github/workflows/test.yml
-
-  build:
-    needs: test
+  extract-version:
     runs-on: ubuntu-latest
-    container:
-      image: python:3.12-bookworm
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_number: ${{ steps.version.outputs.version_number }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION=${{ inputs.tag }}
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
+
+  linux-build:
+    needs: [extract-version]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            container: python:3.12-bookworm
+            platform: linux_x86_64
+            arch: x86_64
+            arch_label: x86_64
+          - os: ubuntu-24.04-arm
+            container: python:3.12-bookworm
+            platform: linux_aarch64
+            arch: arm64
+            arch_label: arm64
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       UV_LINK_MODE: copy
       UV_CACHE_DIR: /github/home/.cache/uv
@@ -37,30 +64,20 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /github/home/.cache/uv
-          key: uvcache-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            uvcache-${{ runner.os }}-
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION=${{ inputs.tag }}
-          else
-            VERSION=${GITHUB_REF#refs/tags/}
-          fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
+            uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
 
       - name: Add Debian sid repository
+        if: matrix.container != null
         run: |
           echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list
           echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
 
-      - name: Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: matrix.container != null
         run: |
           apt-get update
-          # Ensure /etc/os-release exists (required by some actions' OS detection).
           apt-get install -y base-files
           apt-get install -y build-essential pkg-config libbz2-dev
           apt-get install -y -t sid libmapnik-dev
@@ -70,6 +87,25 @@ jobs:
         with:
           enable-cache: false
 
+      - name: Update version from tag
+        run: |
+          # Extract base version from pyproject.toml
+          BASE_VERSION=$(grep -E '^version = ' pyproject.toml | sed -E 's/^version = "([^"]+)"/\1/')
+          TAG=${{ needs.extract-version.outputs.version }}
+          VERSION="${BASE_VERSION}-${TAG}"
+          echo "Base version from pyproject.toml: $BASE_VERSION"
+          echo "Git tag: $TAG"
+          echo "Setting version to: $VERSION"
+          # Update pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          # Update setup.py
+          sed -i "s/version=\"[^\"]*\"/version=\"$VERSION\"/" setup.py
+          # Verify changes
+          echo "pyproject.toml version:"
+          grep "^version = " pyproject.toml
+          echo "setup.py version:"
+          grep "version=" setup.py | head -1
+
       - name: Build wheel and sdist
         run: |
           uv build --wheel --sdist
@@ -77,44 +113,123 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: dist-${{ matrix.platform }}
           path: dist/
           retention-days: 7
 
+  # macos-build:
+  #   needs: [extract-version]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - os: macos-15-intel
+  #           platform: macosx_10_9_x86_64
+  #           arch: x86_64
+  #           arch_label: x86_64
+  #         - os: macos-15
+  #           platform: macosx_15_0_arm64
+  #           arch: arm64
+  #           arch_label: arm64
+  #   runs-on: ${{ matrix.os }}
+  #   env:
+  #     UV_LINK_MODE: copy
+  #     UV_CACHE_DIR: /Users/runner/.cache/uv
+  #   permissions:
+  #     actions: write
+  #     contents: write
+  
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v6
+  #       with:
+  #         submodules: recursive
+  
+  #     - name: Cache uv downloads
+  #       uses: actions/cache@v5
+  #       with:
+  #         path: /Users/runner/.cache/uv
+  #         key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+  #         restore-keys: |
+  #           uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
+  
+  #     - name: Install and cache Homebrew tools
+  #       uses: tecolicom/actions-use-homebrew-tools@v1
+  #       with:
+  #         tools: mapnik icu4c pkg-config
+  #         key: mapnik-${{ matrix.arch_label }}
+
+  #     - name: Install uv
+  #       uses: astral-sh/setup-uv@v7
+  #       with:
+  #         enable-cache: false
+  
+  #     - name: Build wheel and sdist
+  #       run: |
+  #         uv build --wheel --sdist
+  
+  #     - name: Upload build artifacts
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: dist-${{ matrix.platform }}
+  #         path: dist/
+  #         retention-days: 7
+
+  release:
+    needs: 
+      - extract-version
+      - linux-build
+      # - macos-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-all
+
+      - name: Combine artifacts
+        run: |
+          mkdir -p dist
+          find dist-all -name "*.whl" -exec cp {} dist/ \;
+          find dist-all -name "*.tar.gz" -exec head -1 {} \; | head -1 | xargs -I {} find dist-all -name "{}" -exec cp {} dist/ \;
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push'
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
+          tag_name: ${{ needs.extract-version.outputs.version }}
+          name: Release ${{ needs.extract-version.outputs.version }}
           body: |
-            ## Python Mapnik ${{ steps.version.outputs.version_number }}
+            ## Python Mapnik ${{ needs.extract-version.outputs.version_number }}
             
             ### Installation
             
-            Download the wheel file below and install:
+            Download the wheel file for your platform and install:
             ```bash
-            pip install mapnik-${{ steps.version.outputs.version_number }}-*.whl
+            pip install mapnik-${{ needs.extract-version.outputs.version_number }}-*.whl
             ```
             
-            Or install directly from GitHub:
+            Or install directly from GitHub (replace platform tag as needed):
             ```bash
-            pip install https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/mapnik-${{ steps.version.outputs.version_number }}-cp312-cp312-linux_x86_64.whl
+            pip install https://github.com/${{ github.repository }}/releases/download/${{ needs.extract-version.outputs.version }}/mapnik-${{ needs.extract-version.outputs.version_number }}-cp312-cp312-linux_x86_64.whl
             ```
             
             Or install from source:
             ```bash
-            pip install git+https://github.com/${{ github.repository }}.git@${{ steps.version.outputs.version }}
+            pip install git+https://github.com/${{ github.repository }}.git@${{ needs.extract-version.outputs.version }}
             ```
             
             ### Requirements
             
-            - Python >= 3.8
-            - Mapnik >= 4.0.0
+            - Python >= 3.12
+            - Mapnik >= 4.2.0
             
             ### Changes
             
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.version }}/CHANGELOG.md) for details.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.extract-version.outputs.version }}/CHANGELOG.md) for details.
           files: |
             dist/*.whl
             dist/*.tar.gz
@@ -127,10 +242,16 @@ jobs:
         run: |
           echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Released version: **${{ steps.version.outputs.version }}**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Released version: **${{ needs.extract-version.outputs.version }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifacts Built:" >> $GITHUB_STEP_SUMMARY
           ls -lh dist/ >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Supported Platforms:" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux x86_64: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- Linux arm64: ✅" >> $GITHUB_STEP_SUMMARY
+          # echo "- macOS x86_64: ✅" >> $GITHUB_STEP_SUMMARY
+          # echo "- macOS arm64: ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Distribution:" >> $GITHUB_STEP_SUMMARY
           echo "- GitHub Release: ✅" >> $GITHUB_STEP_SUMMARY
