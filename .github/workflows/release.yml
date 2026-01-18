@@ -29,157 +29,70 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
 
-  linux-build:
+  build-wheels:
     needs: [extract-version]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            container: python:3.12-bookworm
-            platform: linux_x86_64
-            arch: x86_64
-            arch_label: x86_64
-          - os: ubuntu-24.04-arm
-            container: python:3.12-bookworm
-            platform: linux_aarch64
-            arch: arm64
-            arch_label: arm64
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
-    env:
-      UV_LINK_MODE: copy
-      UV_CACHE_DIR: /github/home/.cache/uv
     permissions:
-      actions: write
       contents: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Cache uv downloads
-        uses: actions/cache@v5
+      - name: Install cibuildwheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install cibuildwheel
+
+      - name: Build wheels
+        env:
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_BEFORE_BUILD: "pip install uv && uv sync --frozen --no-dev || uv sync --no-dev"
+        run: |
+          cibuildwheel --output-dir wheelhouse
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
         with:
-          path: /github/home/.cache/uv
-          key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
-          restore-keys: |
-            uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          retention-days: 7
 
-      - name: Add Debian sid repository
-        if: matrix.container != null
-        run: |
-          echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list
-          echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
-
-      - name: Install system dependencies (Linux)
-        if: matrix.container != null
-        run: |
-          apt-get update
-          apt-get install -y base-files
-          apt-get install -y build-essential pkg-config libbz2-dev
-          apt-get install -y -t sid libmapnik-dev
+  build-sdist:
+    needs: [extract-version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: false
 
-      - name: Update version from tag
+      - name: Build sdist
         run: |
-          # Extract base version from pyproject.toml
-          BASE_VERSION=$(grep -E '^version = ' pyproject.toml | sed -E 's/^version = "([^"]+)"/\1/')
-          TAG=${{ needs.extract-version.outputs.version }}
-          VERSION="${BASE_VERSION}-${TAG}"
-          echo "Base version from pyproject.toml: $BASE_VERSION"
-          echo "Git tag: $TAG"
-          echo "Setting version to: $VERSION"
-          # Update pyproject.toml
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-          # Update setup.py
-          sed -i "s/version=\"[^\"]*\"/version=\"$VERSION\"/" setup.py
-          # Verify changes
-          echo "pyproject.toml version:"
-          grep "^version = " pyproject.toml
-          echo "setup.py version:"
-          grep "version=" setup.py | head -1
+          uv build --sdist
 
-      - name: Build wheel and sdist
-        run: |
-          uv build --wheel --sdist
-
-      - name: Upload build artifacts
+      - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.platform }}
-          path: dist/
+          name: sdist
+          path: dist/*.tar.gz
           retention-days: 7
-
-  # macos-build:
-  #   needs: [extract-version]
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       include:
-  #         - os: macos-15-intel
-  #           platform: macosx_10_9_x86_64
-  #           arch: x86_64
-  #           arch_label: x86_64
-  #         - os: macos-15
-  #           platform: macosx_15_0_arm64
-  #           arch: arm64
-  #           arch_label: arm64
-  #   runs-on: ${{ matrix.os }}
-  #   env:
-  #     UV_LINK_MODE: copy
-  #     UV_CACHE_DIR: /Users/runner/.cache/uv
-  #   permissions:
-  #     actions: write
-  #     contents: write
-  
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v6
-  #       with:
-  #         submodules: recursive
-  
-  #     - name: Cache uv downloads
-  #       uses: actions/cache@v5
-  #       with:
-  #         path: /Users/runner/.cache/uv
-  #         key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
-  #         restore-keys: |
-  #           uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
-  
-  #     - name: Install and cache Homebrew tools
-  #       uses: tecolicom/actions-use-homebrew-tools@v1
-  #       with:
-  #         tools: mapnik icu4c pkg-config
-  #         key: mapnik-${{ matrix.arch_label }}
-
-  #     - name: Install uv
-  #       uses: astral-sh/setup-uv@v7
-  #       with:
-  #         enable-cache: false
-  
-  #     - name: Build wheel and sdist
-  #       run: |
-  #         uv build --wheel --sdist
-  
-  #     - name: Upload build artifacts
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: dist-${{ matrix.platform }}
-  #         path: dist/
-  #         retention-days: 7
 
   release:
     needs: 
       - extract-version
-      - linux-build
-      # - macos-build
+      - build-wheels
+      - build-sdist
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -194,8 +107,12 @@ jobs:
       - name: Combine artifacts
         run: |
           mkdir -p dist
+          # Copy all wheels
           find dist-all -name "*.whl" -exec cp {} dist/ \;
-          find dist-all -name "*.tar.gz" -exec head -1 {} \; | head -1 | xargs -I {} find dist-all -name "{}" -exec cp {} dist/ \;
+          # Copy sdist (should be only one)
+          find dist-all -name "*.tar.gz" -exec cp {} dist/ \;
+          echo "Artifacts in dist/:"
+          ls -lh dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -250,8 +167,8 @@ jobs:
           echo "### Supported Platforms:" >> $GITHUB_STEP_SUMMARY
           echo "- Linux x86_64: ✅" >> $GITHUB_STEP_SUMMARY
           echo "- Linux arm64: ✅" >> $GITHUB_STEP_SUMMARY
-          # echo "- macOS x86_64: ✅" >> $GITHUB_STEP_SUMMARY
-          # echo "- macOS arm64: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS x86_64: ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS arm64: ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Distribution:" >> $GITHUB_STEP_SUMMARY
           echo "- GitHub Release: ✅" >> $GITHUB_STEP_SUMMARY
