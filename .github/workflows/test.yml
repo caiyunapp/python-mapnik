@@ -9,10 +9,23 @@ on:
   workflow_call:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    container:
-      image: python:3.12-bookworm
+  test-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            container: python:3.12-bookworm
+            platform: linux_x86_64
+            arch: x86_64
+            arch_label: x86_64
+          - os: ubuntu-24.04-arm
+            container: python:3.12-bookworm
+            platform: linux_aarch64
+            arch: arm64
+            arch_label: arm64
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     env:
       UV_LINK_MODE: copy
       UV_CACHE_DIR: /github/home/.cache/uv
@@ -31,18 +44,18 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /github/home/.cache/uv
-          key: uvcache-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
-            uvcache-${{ runner.os }}-
+            uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
 
       - name: Cache uv virtual environment and build artifacts
         uses: actions/cache@v5
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-${{ hashFiles('src/**/*.cpp', 'src/**/*.hpp', 'packaging/**/*.py') }}
+          key: venv-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-${{ hashFiles('src/**/*.cpp', 'src/**/*.hpp', 'packaging/**/*.py') }}
           restore-keys: |
-            venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-
-            venv-${{ runner.os }}-
+            venv-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-
+            venv-${{ runner.os }}-${{ matrix.arch_label }}-
 
       - name: Add Debian sid repository
         run: |
@@ -86,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-reports
+          name: coverage-reports-linux-${{ matrix.arch_label }}
           path: |
             coverage.xml
             htmlcov/
@@ -98,14 +111,142 @@ jobs:
         if: always()
         with:
           files: junit.xml
-          check_name: Test Results
+          check_name: Test Results (Linux ${{ matrix.arch_label }})
           comment_mode: off
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: always()
         with:
-          files: ./coverage.xml
-          flags: unittests
-          name: python-mapnik-coverage
+          files: coverage.xml
+          flags: unittests-linux-${{ matrix.arch_label }}
+          name: python-mapnik-coverage-linux-${{ matrix.arch_label }}
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  test-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: macosx_15_0_x86_64
+            arch: x86_64
+            arch_label: x86_64
+          - os: macos-15
+            platform: macosx_15_0_arm64
+            arch: arm64
+            arch_label: arm64
+          - os: macos-latest
+            platform: macosx_15_0_arm64
+            arch: arm64
+            arch_label: arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      UV_LINK_MODE: copy
+      UV_CACHE_DIR: /Users/runner/.cache/uv
+    permissions:
+      actions: write
+      contents: read
+      checks: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Cache uv downloads
+        uses: actions/cache@v5
+        with:
+          path: /Users/runner/.cache/uv
+          key: uvcache-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            uvcache-${{ runner.os }}-${{ matrix.arch_label }}-
+
+      - name: Cache uv virtual environment and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-${{ hashFiles('src/**/*.cpp', 'src/**/*.hpp', 'packaging/**/*.py') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-
+            venv-${{ runner.os }}-${{ matrix.arch_label }}-
+
+      - name: Install and cache Homebrew tools
+        uses: tecolicom/actions-use-homebrew-tools@v1
+        with:
+          tools: mapnik icu4c pkg-config boost gdal proj harfbuzz
+          key: mapnik-${{ matrix.arch_label }}
+          
+      - name: Setup pkg-config and build environment
+        run: |
+          # Set PKG_CONFIG_PATH to include Homebrew's pkg-config directories
+          # This ensures pkg-config can find Mapnik and its dependencies (ICU, Boost, GDAL, PROJ, HarfBuzz, etc.)
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/opt/icu4c/lib/pkgconfig:$(brew --prefix)/opt/boost/lib/pkgconfig:$(brew --prefix)/opt/gdal/lib/pkgconfig:$(brew --prefix)/opt/proj/lib/pkgconfig:$(brew --prefix)/opt/harfbuzz/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          # Set CXXFLAGS and LDFLAGS to include Boost, GDAL, PROJ, and HarfBuzz headers and libraries
+          echo "CXXFLAGS=-I$(brew --prefix)/opt/boost/include -I$(brew --prefix)/opt/gdal/include -I$(brew --prefix)/opt/proj/include -I$(brew --prefix)/opt/harfbuzz/include $CXXFLAGS" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix)/opt/boost/lib -L$(brew --prefix)/opt/gdal/lib -L$(brew --prefix)/opt/proj/lib -L$(brew --prefix)/opt/harfbuzz/lib $LDFLAGS" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH set to: $PKG_CONFIG_PATH"
+          echo "CXXFLAGS set to: $CXXFLAGS"
+          echo "LDFLAGS set to: $LDFLAGS"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Install Python dependencies and build package
+        run: |
+          # Use lockfile when present; avoid doing two full syncs (which can rebuild twice).
+          if [ -f uv.lock ]; then
+            uv sync --extra test --frozen --verbose
+          else
+            uv sync --extra test --verbose
+          fi
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest test/python_tests -v \
+            --cov=mapnik \
+            --cov-report=term \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --junitxml=junit.xml
+
+      - name: Verify coverage files
+        if: always()
+        run: |
+          pwd
+          ls -la coverage.xml || echo "coverage.xml not found"
+          if [ -f coverage.xml ]; then
+            echo "✅ coverage.xml exists"
+            head -20 coverage.xml
+          else
+            echo "❌ coverage.xml not found"
+            exit 1
+          fi
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports-macos-${{ matrix.arch_label }}
+          path: |
+            coverage.xml
+            htmlcov/
+            junit.xml
+          retention-days: 30
+
+      # Note: publish-unit-test-result-action doesn't support macOS (container action limitation)
+      # Test results are still uploaded as artifacts above
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          files: coverage.xml
+          flags: unittests-macos-${{ matrix.arch_label }}
+          name: python-mapnik-coverage-macos-${{ matrix.arch_label }}
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
