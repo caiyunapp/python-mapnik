@@ -46,3 +46,45 @@ testpaths = [
 [tool.uv]
 # Pin uv version for CI/dev consistency (used by astral-sh/setup-uv).
 required-version = ">=0.9.0"
+
+[tool.cibuildwheel]
+# Build only Python 3.12+ (matches requires-python)
+build = "cp312-*"
+skip = ["*-win32", "*-manylinux_i686", "*-musllinux_*"]
+test-command = "uv run pytest test/python_tests -v"
+test-extras = ["test"]
+
+# Linux build configuration
+[tool.cibuildwheel.linux]
+# Use manylinux_2_28 (Debian 12 / Bookworm based)
+manylinux-x86_64-image = "manylinux_2_28_x86_64"
+manylinux-aarch64-image = "manylinux_2_28_aarch64"
+
+# Install system dependencies before build
+before-all = """
+  # Add Debian sid repository for Mapnik 4.2
+  echo "deb http://deb.debian.org/debian sid main" >> /etc/apt/sources.list.d/sid.list
+  echo 'Package: *\nPin: release a=sid\nPin-Priority: 100' > /etc/apt/preferences.d/sid
+
+  # Install build dependencies
+  apt-get update
+  apt-get install -y build-essential pkg-config libbz2-dev
+  apt-get install -y -t sid libmapnik-dev fonts-noto-cjk
+"""
+
+# macOS build configuration
+[tool.cibuildwheel.macos]
+# Build for both x86_64 and arm64
+archs = ["x86_64", "arm64"]
+
+# Install dependencies via Homebrew (run once before all builds)
+before-all = "brew install mapnik icu4c pkg-config boost gdal proj harfbuzz"
+
+# Set environment variables for each build
+# These are exported in the build environment
+before-build = """
+  eval $(brew shellenv)
+  export PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/opt/icu4c/lib/pkgconfig:$(brew --prefix)/opt/boost/lib/pkgconfig:$(brew --prefix)/opt/gdal/lib/pkgconfig:$(brew --prefix)/opt/proj/lib/pkgconfig:$(brew --prefix)/opt/harfbuzz/lib/pkgconfig:$PKG_CONFIG_PATH
+  export CXXFLAGS="-I$(brew --prefix)/opt/boost/include -I$(brew --prefix)/opt/gdal/include -I$(brew --prefix)/opt/proj/include -I$(brew --prefix)/opt/harfbuzz/include $CXXFLAGS"
+  export LDFLAGS="-L$(brew --prefix)/opt/boost/lib -L$(brew --prefix)/opt/gdal/lib -L$(brew --prefix)/opt/proj/lib -L$(brew --prefix)/opt/harfbuzz/lib $LDFLAGS"
+"""

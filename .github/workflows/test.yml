@@ -176,20 +176,51 @@ jobs:
       - name: Install and cache Homebrew tools
         uses: tecolicom/actions-use-homebrew-tools@v1
         with:
-          tools: mapnik icu4c pkg-config boost gdal proj harfbuzz
-          key: mapnik-${{ matrix.arch_label }}
+          tools: mapnik icu4c pkg-config boost gdal proj harfbuzz libx11 xorgproto libxext libxrender libxau libxdmcp
+          key: mapnik-${{ matrix.os }}-${{ matrix.arch_label }}-20260118
           
       - name: Setup pkg-config and build environment
         run: |
+          # Ensure Homebrew environment is available
+          eval $(brew shellenv)
+          # Get package-specific prefixes using brew --prefix and save to GITHUB_ENV for reuse
+          HOMEBREW_PREFIX=$(brew --prefix)
+          MAPNIK_PREFIX=$(brew --prefix mapnik)
+          ICU4C_PREFIX=$(brew --prefix icu4c)
+          BOOST_PREFIX=$(brew --prefix boost)
+          GDAL_PREFIX=$(brew --prefix gdal)
+          PROJ_PREFIX=$(brew --prefix proj)
+          HARFBUZZ_PREFIX=$(brew --prefix harfbuzz)
+          XORGPROTO_PREFIX=$(brew --prefix xorgproto)
+          # Find the actual xorgproto pkg-config directory (may be in Cellar with version)
+          XORGPROTO_PKGCONFIG_DIR=$(find "$HOMEBREW_PREFIX/Cellar/xorgproto" -type d -name "pkgconfig" 2>/dev/null | head -1)
+          if [ -z "$XORGPROTO_PKGCONFIG_DIR" ]; then
+            # Fallback to opt symlink location
+            XORGPROTO_PKGCONFIG_DIR="$XORGPROTO_PREFIX/share/pkgconfig"
+            echo "Warning: xorgproto pkgconfig directory not found in Cellar, using fallback: $XORGPROTO_PKGCONFIG_DIR"
+          else
+            echo "Found xorgproto pkgconfig directory: $XORGPROTO_PKGCONFIG_DIR"
+          fi
+          # Save prefixes to GITHUB_ENV for reuse in subsequent steps
+          echo "HOMEBREW_PREFIX=$HOMEBREW_PREFIX" >> $GITHUB_ENV
+          echo "MAPNIK_PREFIX=$MAPNIK_PREFIX" >> $GITHUB_ENV
+          echo "ICU4C_PREFIX=$ICU4C_PREFIX" >> $GITHUB_ENV
+          echo "BOOST_PREFIX=$BOOST_PREFIX" >> $GITHUB_ENV
+          echo "GDAL_PREFIX=$GDAL_PREFIX" >> $GITHUB_ENV
+          echo "PROJ_PREFIX=$PROJ_PREFIX" >> $GITHUB_ENV
+          echo "HARFBUZZ_PREFIX=$HARFBUZZ_PREFIX" >> $GITHUB_ENV
+          echo "XORGPROTO_PREFIX=$XORGPROTO_PREFIX" >> $GITHUB_ENV
+          echo "XORGPROTO_PKGCONFIG_DIR=$XORGPROTO_PKGCONFIG_DIR" >> $GITHUB_ENV
+          echo "Homebrew prefix: $HOMEBREW_PREFIX"
+          echo "Mapnik prefix: $MAPNIK_PREFIX"
+          echo "xorgproto pkg-config dir: $XORGPROTO_PKGCONFIG_DIR"
           # Set PKG_CONFIG_PATH to include Homebrew's pkg-config directories
-          # This ensures pkg-config can find Mapnik and its dependencies (ICU, Boost, GDAL, PROJ, HarfBuzz, etc.)
-          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/opt/icu4c/lib/pkgconfig:$(brew --prefix)/opt/boost/lib/pkgconfig:$(brew --prefix)/opt/gdal/lib/pkgconfig:$(brew --prefix)/opt/proj/lib/pkgconfig:$(brew --prefix)/opt/harfbuzz/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          # This ensures pkg-config can find Mapnik and its dependencies (ICU, Boost, GDAL, PROJ, HarfBuzz, X11 proto, etc.)
+          # Note: xorgproto .pc files are in Cellar/xorgproto/<version>/share/pkgconfig
+          echo "PKG_CONFIG_PATH=$HOMEBREW_PREFIX/lib/pkgconfig:$HOMEBREW_PREFIX/share/pkgconfig:$ICU4C_PREFIX/lib/pkgconfig:$GDAL_PREFIX/lib/pkgconfig:$PROJ_PREFIX/lib/pkgconfig:$HARFBUZZ_PREFIX/lib/pkgconfig:$XORGPROTO_PKGCONFIG_DIR:$XORGPROTO_PREFIX/share/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
           # Set CXXFLAGS and LDFLAGS to include Boost, GDAL, PROJ, and HarfBuzz headers and libraries
-          echo "CXXFLAGS=-I$(brew --prefix)/opt/boost/include -I$(brew --prefix)/opt/gdal/include -I$(brew --prefix)/opt/proj/include -I$(brew --prefix)/opt/harfbuzz/include $CXXFLAGS" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix)/opt/boost/lib -L$(brew --prefix)/opt/gdal/lib -L$(brew --prefix)/opt/proj/lib -L$(brew --prefix)/opt/harfbuzz/lib $LDFLAGS" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH set to: $PKG_CONFIG_PATH"
-          echo "CXXFLAGS set to: $CXXFLAGS"
-          echo "LDFLAGS set to: $LDFLAGS"
+          echo "CXXFLAGS=-I$BOOST_PREFIX/include -I$GDAL_PREFIX/include -I$PROJ_PREFIX/include -I$HARFBUZZ_PREFIX/include $CXXFLAGS" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$BOOST_PREFIX/lib -L$GDAL_PREFIX/lib -L$PROJ_PREFIX/lib -L$HARFBUZZ_PREFIX/lib $LDFLAGS" >> $GITHUB_ENV
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -198,6 +229,13 @@ jobs:
 
       - name: Install Python dependencies and build package
         run: |
+          # Ensure Homebrew environment is available
+          eval $(brew shellenv)
+          # Re-export environment variables (already set in previous step via GITHUB_ENV)
+          # This ensures they're available in the current shell session for subprocess calls
+          export PKG_CONFIG_PATH="$PKG_CONFIG_PATH"
+          export CXXFLAGS="$CXXFLAGS"
+          export LDFLAGS="$LDFLAGS"
           # Use lockfile when present; avoid doing two full syncs (which can rebuild twice).
           if [ -f uv.lock ]; then
             uv sync --extra test --frozen --verbose
@@ -231,22 +269,27 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-reports-macos-${{ matrix.arch_label }}
+          name: coverage-reports-macos-${{ matrix.os }}-${{ matrix.arch_label }}
           path: |
             coverage.xml
             htmlcov/
             junit.xml
           retention-days: 30
 
-      # Note: publish-unit-test-result-action doesn't support macOS (container action limitation)
-      # Test results are still uploaded as artifacts above
-      
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action/macos@v2
+        if: always()
+        with:
+          files: junit.xml
+          check_name: Test Results (macOS ${{ matrix.os }} ${{ matrix.arch_label }})
+          comment_mode: off
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: always()
         with:
           files: coverage.xml
-          flags: unittests-macos-${{ matrix.arch_label }}
-          name: python-mapnik-coverage-macos-${{ matrix.arch_label }}
+          flags: unittests-macos-${{ matrix.os }}-${{ matrix.arch_label }}
+          name: python-mapnik-coverage-macos-${{ matrix.os }}-${{ matrix.arch_label }}
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
