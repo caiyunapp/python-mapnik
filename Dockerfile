@@ -22,13 +22,20 @@ RUN apt-get update && \
     pkg-config
 
 # 安装 Mapnik 4.2 和必要的开发工具
+# libmapnik-dev 会自动安装大部分依赖，但我们需要确保所有构建依赖都存在
 RUN apt-get install -y -t sid \
-    libmapnik-dev \
-    fonts-noto-cjk
+    libmapnik-dev
 
 # 需要额外的依赖写在这里，避免缓存失效。上面的依赖安装起来时间很长
+# 添加可能缺失的构建依赖
 RUN apt-get install -y \
     libbz2-dev \
+    libssl-dev \
+    libboost-dev \
+    libboost-filesystem-dev \
+    libboost-program-options-dev \
+    libboost-regex-dev \
+    libboost-system-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 uv

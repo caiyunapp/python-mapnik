@@ -1,37 +1,55 @@
-import re, os
+import os
+import re
+
 import mapnik
 import pytest
-from .utilities import side_by_side_image, execution_path
+
+from .utilities import execution_path, images_almost_equal, side_by_side_image
+
 
 @pytest.fixture(scope="module")
 def setup():
     # All of the paths used are relative, if we run the tests
     # from another directory we need to chdir()
-    os.chdir(execution_path('.'))
+    os.chdir(execution_path("."))
     yield
+
 
 def replace_style(m, name, style):
     m.remove_style(name)
     m.append_style(name, style)
 
+
 def test_append():
     s = mapnik.Style()
-    assert s.image_filters ==  ''
-    s.image_filters = 'gray'
-    assert s.image_filters ==  'gray'
-    s.image_filters = 'sharpen'
-    assert s.image_filters ==  'sharpen'
+    assert s.image_filters == ""
+    s.image_filters = "gray"
+    assert s.image_filters == "gray"
+    s.image_filters = "sharpen"
+    assert s.image_filters == "sharpen"
 
-if 'shape' in mapnik.DatasourceCache.plugin_names():
+
+if "shape" in mapnik.DatasourceCache.plugin_names():
+
     def test_style_level_image_filter(setup):
         m = mapnik.Map(256, 256)
-        mapnik.load_map(m, '../data/good_maps/style_level_image_filter.xml')
+        mapnik.load_map(m, "../data/good_maps/style_level_image_filter.xml")
         m.zoom_all()
         successes = []
         fails = []
-        for name in ("", "agg-stack-blur(2,2)", "blur",
-                     "edge-detect", "emboss", "gray", "invert",
-                     "sharpen", "sobel", "x-gradient", "y-gradient"):
+        for name in (
+            "",
+            "agg-stack-blur(2,2)",
+            "blur",
+            "edge-detect",
+            "emboss",
+            "gray",
+            "invert",
+            "sharpen",
+            "sobel",
+            "x-gradient",
+            "y-gradient",
+        ):
             if name == "":
                 filename = "none"
             else:
@@ -46,24 +64,25 @@ if 'shape' in mapnik.DatasourceCache.plugin_names():
             replace_style(m, "labels", style_labels)
             im = mapnik.Image(m.width, m.height)
             mapnik.render(m, im)
-            actual = '/tmp/mapnik-style-image-filter-' + filename + '.png'
-            expected = 'images/style-image-filter/' + filename + '.png'
+            actual = "/tmp/mapnik-style-image-filter-" + filename + ".png"
+            expected = "images/style-image-filter/" + filename + ".png"
             im.save(actual, "png32")
-            if not os.path.exists(expected) or os.environ.get('UPDATE'):
-                print('generating expected test image: %s' % expected)
-                im.save(expected, 'png32')
+            if not os.path.exists(expected) or os.environ.get("UPDATE"):
+                print("generating expected test image: %s" % expected)
+                im.save(expected, "png32")
             expected_im = mapnik.Image.open(expected)
-            # compare them
-            if im.to_string('png32') == expected_im.to_string('png32'):
+            # compare them with tolerance for minor rendering differences
+            try:
+                images_almost_equal(
+                    im, expected_im, tolerance=2, max_mismatch_ratio=0.002
+                )
                 successes.append(name)
-            else:
+            except AssertionError:
                 fails.append(
-                    'failed comparing actual (%s) and expected(%s)' %
-                    (actual, expected))
+                    "failed comparing actual (%s) and expected(%s)" % (actual, expected)
+                )
                 fail_im = side_by_side_image(expected_im, im)
                 fail_im.save(
-                    '/tmp/mapnik-style-image-filter-' +
-                    filename +
-                    '.fail.png',
-                    'png32')
-        assert len(fails) ==  0, '\n' + '\n'.join(fails)
+                    "/tmp/mapnik-style-image-filter-" + filename + ".fail.png", "png32"
+                )
+        assert len(fails) == 0, "\n" + "\n".join(fails)

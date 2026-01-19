@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
   workflow_dispatch:
   workflow_call:
 
@@ -67,8 +67,20 @@ jobs:
           apt-get update
           # Ensure /etc/os-release exists (required by some actions' OS detection).
           apt-get install -y base-files
-          apt-get install -y build-essential pkg-config libbz2-dev
-          apt-get install -y -t sid libmapnik-dev fonts-noto-cjk
+          # Install build tools and common dependencies
+          apt-get install -y \
+            build-essential \
+            pkg-config \
+            libbz2-dev \
+            libssl-dev \
+            libboost-dev \
+            libboost-filesystem-dev \
+            libboost-program-options-dev \
+            libboost-regex-dev \
+            libboost-system-dev
+          # Install Mapnik from sid (version 4.2)
+          # This will automatically install most dependencies like ICU, Cairo, HarfBuzz, etc.
+          apt-get install -y -t sid libmapnik-dev
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -124,6 +136,17 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Build sdist
+        run: |
+          uv build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist-${{ matrix.os }}-${{ matrix.arch_label }}
+          path: dist/*.tar.gz
+          retention-days: 7
+
   test-macos:
     strategy:
       fail-fast: false
@@ -173,54 +196,37 @@ jobs:
             venv-${{ runner.os }}-${{ matrix.arch_label }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'setup.py') }}-
             venv-${{ runner.os }}-${{ matrix.arch_label }}-
 
-      - name: Install and cache Homebrew tools
-        uses: tecolicom/actions-use-homebrew-tools@v1
-        with:
-          tools: mapnik icu4c pkg-config boost gdal proj harfbuzz libx11 xorgproto libxext libxrender libxau libxdmcp
-          key: mapnik-${{ matrix.os }}-${{ matrix.arch_label }}-20260118
-          
-      - name: Setup pkg-config and build environment
+      - name: Install Homebrew dependencies
+        run: |
+          # Install Mapnik which will automatically install all required dependencies
+          # including boost, cairo, harfbuzz, icu4c, gdal, proj, freetype, and 100+ other packages
+          brew install mapnik pkg-config
+
+      - name: Setup build environment
         run: |
           # Ensure Homebrew environment is available
           eval $(brew shellenv)
-          # Get package-specific prefixes using brew --prefix and save to GITHUB_ENV for reuse
+
+          # Note: setup.py now auto-detects Homebrew paths for Boost, HarfBuzz, etc.
+          # We only need to ensure PKG_CONFIG_PATH includes ICU and Mapnik
           HOMEBREW_PREFIX=$(brew --prefix)
-          MAPNIK_PREFIX=$(brew --prefix mapnik)
-          ICU4C_PREFIX=$(brew --prefix icu4c)
-          BOOST_PREFIX=$(brew --prefix boost)
-          GDAL_PREFIX=$(brew --prefix gdal)
-          PROJ_PREFIX=$(brew --prefix proj)
-          HARFBUZZ_PREFIX=$(brew --prefix harfbuzz)
-          XORGPROTO_PREFIX=$(brew --prefix xorgproto)
-          # Find the actual xorgproto pkg-config directory (may be in Cellar with version)
-          XORGPROTO_PKGCONFIG_DIR=$(find "$HOMEBREW_PREFIX/Cellar/xorgproto" -type d -name "pkgconfig" 2>/dev/null | head -1)
-          if [ -z "$XORGPROTO_PKGCONFIG_DIR" ]; then
-            # Fallback to opt symlink location
-            XORGPROTO_PKGCONFIG_DIR="$XORGPROTO_PREFIX/share/pkgconfig"
-            echo "Warning: xorgproto pkgconfig directory not found in Cellar, using fallback: $XORGPROTO_PKGCONFIG_DIR"
-          else
-            echo "Found xorgproto pkgconfig directory: $XORGPROTO_PKGCONFIG_DIR"
-          fi
-          # Save prefixes to GITHUB_ENV for reuse in subsequent steps
-          echo "HOMEBREW_PREFIX=$HOMEBREW_PREFIX" >> $GITHUB_ENV
-          echo "MAPNIK_PREFIX=$MAPNIK_PREFIX" >> $GITHUB_ENV
-          echo "ICU4C_PREFIX=$ICU4C_PREFIX" >> $GITHUB_ENV
-          echo "BOOST_PREFIX=$BOOST_PREFIX" >> $GITHUB_ENV
-          echo "GDAL_PREFIX=$GDAL_PREFIX" >> $GITHUB_ENV
-          echo "PROJ_PREFIX=$PROJ_PREFIX" >> $GITHUB_ENV
-          echo "HARFBUZZ_PREFIX=$HARFBUZZ_PREFIX" >> $GITHUB_ENV
-          echo "XORGPROTO_PREFIX=$XORGPROTO_PREFIX" >> $GITHUB_ENV
-          echo "XORGPROTO_PKGCONFIG_DIR=$XORGPROTO_PKGCONFIG_DIR" >> $GITHUB_ENV
+
+          # Get ICU prefix (could be icu4c@78 or icu4c)
+          ICU4C_PREFIX=$(brew --prefix icu4c@78 2>/dev/null || brew --prefix icu4c 2>/dev/null || echo "")
+          MAPNIK_PREFIX=$(brew --prefix mapnik 2>/dev/null || echo "$HOMEBREW_PREFIX/opt/mapnik")
+
+          # Set up minimal PKG_CONFIG_PATH (setup.py will handle the rest)
+          PKG_CONFIG_PATH="$HOMEBREW_PREFIX/lib/pkgconfig:$HOMEBREW_PREFIX/share/pkgconfig"
+          [ -n "$ICU4C_PREFIX" ] && PKG_CONFIG_PATH="$ICU4C_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          [ -d "$MAPNIK_PREFIX/lib/pkgconfig" ] && PKG_CONFIG_PATH="$MAPNIK_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
+          # Verify environment
           echo "Homebrew prefix: $HOMEBREW_PREFIX"
-          echo "Mapnik prefix: $MAPNIK_PREFIX"
-          echo "xorgproto pkg-config dir: $XORGPROTO_PKGCONFIG_DIR"
-          # Set PKG_CONFIG_PATH to include Homebrew's pkg-config directories
-          # This ensures pkg-config can find Mapnik and its dependencies (ICU, Boost, GDAL, PROJ, HarfBuzz, X11 proto, etc.)
-          # Note: xorgproto .pc files are in Cellar/xorgproto/<version>/share/pkgconfig
-          echo "PKG_CONFIG_PATH=$HOMEBREW_PREFIX/lib/pkgconfig:$HOMEBREW_PREFIX/share/pkgconfig:$ICU4C_PREFIX/lib/pkgconfig:$GDAL_PREFIX/lib/pkgconfig:$PROJ_PREFIX/lib/pkgconfig:$HARFBUZZ_PREFIX/lib/pkgconfig:$XORGPROTO_PKGCONFIG_DIR:$XORGPROTO_PREFIX/share/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-          # Set CXXFLAGS and LDFLAGS to include Boost, GDAL, PROJ, and HarfBuzz headers and libraries
-          echo "CXXFLAGS=-I$BOOST_PREFIX/include -I$GDAL_PREFIX/include -I$PROJ_PREFIX/include -I$HARFBUZZ_PREFIX/include $CXXFLAGS" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$BOOST_PREFIX/lib -L$GDAL_PREFIX/lib -L$PROJ_PREFIX/lib -L$HARFBUZZ_PREFIX/lib $LDFLAGS" >> $GITHUB_ENV
+          echo "ICU prefix: $ICU4C_PREFIX"
+          echo "Mapnik version: $(mapnik-config --version 2>/dev/null || echo 'not found')"
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -231,12 +237,9 @@ jobs:
         run: |
           # Ensure Homebrew environment is available
           eval $(brew shellenv)
-          # Re-export environment variables (already set in previous step via GITHUB_ENV)
-          # This ensures they're available in the current shell session for subprocess calls
-          export PKG_CONFIG_PATH="$PKG_CONFIG_PATH"
-          export CXXFLAGS="$CXXFLAGS"
-          export LDFLAGS="$LDFLAGS"
+
           # Use lockfile when present; avoid doing two full syncs (which can rebuild twice).
+          # Note: setup.py will automatically detect and configure Homebrew paths
           if [ -f uv.lock ]; then
             uv sync --extra test --frozen --verbose
           else
@@ -293,3 +296,14 @@ jobs:
           name: python-mapnik-coverage-macos-${{ matrix.os }}-${{ matrix.arch_label }}
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Build sdist
+        run: |
+          uv build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist-${{ matrix.os }}-${{ matrix.arch_label }}
+          path: dist/*.tar.gz
+          retention-days: 7

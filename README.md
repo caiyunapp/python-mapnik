@@ -4,13 +4,50 @@ https://github.com/pybind/pybind11
 
 ## Installation
 
+### Prerequisites
+
+Before building from source, you need to install Mapnik and its dependencies:
+
+#### Linux (Debian/Ubuntu)
+
+```bash
+# Install Mapnik and development dependencies
+apt-get update
+apt-get install -y \
+    build-essential \
+    pkg-config \
+    libmapnik-dev \
+    libboost-dev
+```
+
+#### macOS (Homebrew)
+
+**For building from source:**
+```bash
+# Install Mapnik and dependencies
+brew install mapnik boost icu4c
+```
+
+The build script will automatically detect Homebrew paths on macOS.
+
+**For using pre-built wheels:**
+Pre-built wheels bundle all dependencies (including Mapnik) and work standalone without requiring Homebrew installation.
+
 ### Building from Source
 
-Make sure 'mapnik-config' is present and accessible via $PATH env variable 
+#### Using uv (recommended)
 
+```bash
+uv sync
 ```
-pip install . -v 
+
+#### Using pip
+
+```bash
+pip install . -v
 ```
+
+**Note**: On macOS, the build system automatically configures Homebrew paths for Mapnik, Boost, and ICU. On Linux, standard system paths are used.
 
 ## Testing
 

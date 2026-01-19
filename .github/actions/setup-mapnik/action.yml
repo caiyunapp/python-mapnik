@@ -1,0 +1,13 @@
+name: Setup Mapnik build env
+description: Configure cibuildwheel env vars for Mapnik builds
+runs:
+  using: composite
+  steps:
+    - name: Export cibuildwheel env vars
+      shell: bash
+      run: |
+        {
+          echo "CIBW_BUILD_FRONTEND=pip"
+          echo "CIBW_ENVIRONMENT_LINUX=PKG_CONFIG_PATH=/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/opt/lib/pkgconfig:\$PKG_CONFIG_PATH"
+          echo "CIBW_BEFORE_ALL_LINUX=bash .github/actions/setup-mapnik/setup-manylinux.sh"
+        } >> "$GITHUB_ENV"
